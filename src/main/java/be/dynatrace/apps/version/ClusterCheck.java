@@ -11,16 +11,17 @@ public class ClusterCheck {
 
 	public static void main(String[] args) {
 
-		Properties p=new Properties();
+		ApiClient ac=null;
 		try {
-			p.load(new FileInputStream(args[0]+".properties"));
+			Properties p=new Properties();
+			p.load(new FileInputStream("config\\"+args[0]+".properties"));
+			ac=new ApiClient(p);
 		} catch (Exception e) {
 			System.err.println("Config file not found or invalid property file");
-//			System.exit(-1);			
+			System.exit(-1);			
 		}
 		
 		
-		ApiClient ac=new ApiClient(p);
 		
 		try {
 			System.out.println("Getting time");
