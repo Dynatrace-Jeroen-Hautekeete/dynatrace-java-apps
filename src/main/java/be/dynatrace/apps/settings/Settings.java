@@ -28,11 +28,12 @@ import be.dynatrace.api.model.v2.SettingsSchemaSummary;
 public class Settings {
 
 	private static String workdir = "C:\\Data\\Dynatrace\\Development\\MonacoV2";
+	private static String from = "now-30d";
 
 	public static void main(String[] args) {
 		
 		if (args.length!=1) {
-			System.out.println("Usage: Settings <env>\n\tthis will load <env>.properties");
+			System.out.println("Usage: Settings <env>\n\tthis will load config\\<env>.properties");
 			System.exit(-1);
 		}
 				
@@ -53,6 +54,9 @@ public class Settings {
 		if (p.containsKey("workdir")) {
 			workdir=p.getProperty("workdir");
 		}
+		if (p.containsKey("from")) {
+			from=p.getProperty("from");
+		}
 		
 		try {
 			System.out.println("Getting schemas");
@@ -71,14 +75,17 @@ public class Settings {
 
 				// create folder
 				try {
+					//DEBUG
+					//System.err.println("Creating folder hierarchy: "+workdir + "\\_schemas");
 					File fe = new File(workdir + "\\_schemas");
 					fe.mkdirs();
 					FileWriter ew = new FileWriter(
-						workdir + "\\_schemas\\" + schema.getSchemaid().replaceAll(":","_") + ".json");
+						workdir + "\\_schemas\\" + normalize(schema.getSchemaid()) + ".json");
 					ssd.getRaw().write(ew, 2, 0);
 					ew.close();
 				} catch (Exception e) {
 					System.err.println("Failed to write schema: "+schema.getSchemaid());
+					//e.printStackTrace(System.err);
 				}
 				
 				for (String scope : ssd.getScopes()) {
@@ -117,10 +124,11 @@ public class Settings {
 				boolean isEntity=scope.matches("[A-Z_]+");				
 				if (isEntity) {
 					
-					EntityList el = EntityList.load(ac, "type(\"" + scope + "\")");
+					EntityList el = EntityList.load(ac, "type(\"" + scope + "\")",from);
 
 					// BEGIN entities
 					if ((el != null) && (el.hasEntities())) {
+						System.out.println("  ... retrieving settings for " + el.size() + " entities");
 
 						el.getEntities().forEach((id, ent) -> {
 							String[] sscope = new String[1];
@@ -132,15 +140,35 @@ public class Settings {
 							// if settings exist for current entity
 							if (sol.hasItems()) {
 								try {
-									// create folder
-									File fe = new File(workdir + "\\" + scope + "\\" + id);
-									fe.mkdirs();
+									
+									String id2;
 									// get detailed entity
-									// dump entity
 									JSONObject entity = MonitoredEntities.getEntity(ac, id);
+									
+									switch(scope) {
+										case "HOST":
+										case "HOST_GROUP":
+										case "APPLICATION":
+										case "SYNTHETIC_TEST":
+										case "HTTP_CHECK":
+											id2=normalize(entity.getString("displayName"));
+											break;
+										case "PROCESS_GROUP":
+										case "SERVICE":
+											id2=normalize(entity.getString("displayName")+" - "+id);
+											break;
+										default:
+											id2=id;
+											break;
+									}
+																		
+									// dump entity
+									// create folder
+									File fe = new File(workdir + "\\" + scope + "\\" + id2);
+									fe.mkdirs();
 
 									FileWriter ew = new FileWriter(
-											workdir + "\\" + scope + "\\" + id + "\\" + id + ".json");
+											workdir + "\\" + scope + "\\" + id2 + "\\" + id2 + ".json");
 									entity.write(ew, 2, 0);
 									ew.close();
 									// dump settings
@@ -148,9 +176,9 @@ public class Settings {
 									sol.getItems().forEach((cfgid, config) -> {
 										
 										try {
-											writeSchema(workdir + "\\" + scope + "\\" + id,SettingsObjects.getSettingsObject(ac, cfgid),schemadetails.get(((SettingsObjectSummary)config).getSchemaid()).getRaw().getBoolean("multiObject"));
+											writeSchema(workdir + "\\" + scope + "\\" + id2,SettingsObjects.getSettingsObject(ac, cfgid),schemadetails.get(((SettingsObjectSummary)config).getSchemaid()).getRaw().getBoolean("multiObject"));
 										} catch (Exception e) {
-											System.err.println("ERROR while writing entity settings for: " + id + " :: " + cfgid);
+											System.err.println("ERROR while writing entity settings for: " + id2 + " :: " + cfgid);
 										}
 										
 /*										
@@ -261,7 +289,10 @@ public class Settings {
 			if (schema.getJSONObject("value").has("name"))
 				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getJSONObject("value").getString("name"))+".json";
 			else
-				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getString("objectId"))+".json";				
+				if (schema.getJSONObject("value").has("apiName"))
+					filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getJSONObject("value").getString("apiName"))+".json";
+				else 
+					filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getString("objectId"))+".json";				
 		} else {
 			foldername=base;
 			filename=  base+"\\"+normalize(schema.getString("schemaId"))+".json";
@@ -286,7 +317,9 @@ public class Settings {
 	private static String normalize(String escapeme) {
 		return escapeme.replaceAll(":","_").
 				replaceAll("<","_").
-				replaceAll(">","_");
+				replaceAll(">","_").
+				replaceAll("\\*","_").				
+				replaceAll("/","_");
 		
 	}
 	
