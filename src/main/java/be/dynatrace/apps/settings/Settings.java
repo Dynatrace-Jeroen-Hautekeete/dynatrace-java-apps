@@ -29,17 +29,12 @@ public class Settings {
 
 	private static String workdir = "C:\\Data\\Dynatrace\\Development\\settings\\";
 	private static String from = "now-30d";
-
-	public static void main(String[] args) {
-		
-		if (args.length!=1) {
-			System.out.println("Usage: Settings <env>\n\tthis will load config\\<env>.properties");
-			System.exit(-1);
-		}
-				
+	
+	
+	private static Properties initialize(String config) {
 		Properties p=new Properties();
 		try {
-			p.load(new FileInputStream("config\\"+args[0]+".properties"));
+			p.load(new FileInputStream("config\\"+config+".properties"));
 		} catch (Exception e) {
 			System.err.println("Config file not found or invalid property file");
 //			System.exit(-1);			
@@ -50,13 +45,46 @@ public class Settings {
 			System.exit(-1);			
 		}
 
-		ApiClient ac = new ApiClient(p);
 		if (p.containsKey("workdir")) {
 			workdir=p.getProperty("workdir")+"\\settings\\";
 		}
 		if (p.containsKey("from")) {
 			from=p.getProperty("from");
 		}
+		return p;
+	}
+
+//	private static void loadSchemaDetail(Map<String, SettingsSchemaDetail> schemadetails){	
+//	}
+	
+	private static void writeSchema(SettingsSchemaDetail ssd){
+		// create folder
+		try {
+			//DEBUG
+			//System.err.println("Creating folder hierarchy: "+workdir + "_schemas");
+			File fe = new File(workdir + "_schemas");
+			fe.mkdirs();
+			FileWriter ew = new FileWriter(
+				workdir + "_schemas\\" + normalize(ssd.getSchemaid()) + ".json");
+			ssd.getRaw().write(ew, 2, 0);
+			ew.close();
+		} catch (Exception e) {
+			System.err.println("Failed to write schema: "+ssd.getSchemaid());
+			//e.printStackTrace(System.err);
+		}		
+	}
+	
+	
+	public static void main(String[] args) {
+		
+		if (args.length!=1) {
+			System.out.println("Usage: Settings <env>\n\tthis will load config\\<env>.properties");
+			System.exit(-1);
+		}
+				
+		Properties p=initialize(args[0]);
+
+		ApiClient ac = new ApiClient(p);
 		
 		try {
 			System.out.println("Getting schemas");
@@ -65,90 +93,37 @@ public class Settings {
 			Map<String, SettingsSchemaSummary> schemas = ssl.getItems();
 			Map<String, SettingsSchemaDetail> schemadetails = new HashMap<String, SettingsSchemaDetail>();
 
-			Map<String, Vector<String>> scopedsettings = new HashMap<String, Vector<String>>();
+//			Map<String, Vector<String>> scopedsettings = new HashMap<String, Vector<String>>();
 
 			schemas.forEach((id, schema) -> {
 
 				// load detailed schema
 				SettingsSchemaDetail ssd = schema.loadDetail(ac);
 				schemadetails.put(id, ssd);
+				writeSchema(ssd);
+	
+				// loadschemavalues	
+				SettingsObjectList sol = SettingsObjectList.load(ac, id);
 
-				// create folder
-				try {
-					//DEBUG
-					//System.err.println("Creating folder hierarchy: "+workdir + "_schemas");
-					File fe = new File(workdir + "_schemas");
-					fe.mkdirs();
-					FileWriter ew = new FileWriter(
-						workdir + "_schemas\\" + normalize(schema.getSchemaid()) + ".json");
-					ssd.getRaw().write(ew, 2, 0);
-					ew.close();
-				} catch (Exception e) {
-					System.err.println("Failed to write schema: "+schema.getSchemaid());
-					//e.printStackTrace(System.err);
-				}
-				
-				for (String scope : ssd.getScopes()) {
-					Vector<String> scopedlist = scopedsettings.get(scope);
+				// foreach -> writeSchemaValue
+				if (sol.hasItems()) {
 
-					if (scopedlist == null) {
-						scopedlist = new Vector<String>();
-						scopedsettings.put(scope, scopedlist);
-					}
+					sol.getItems().forEach((cfgid, config) -> {
+						String scope="<unresolved>";
+						try {
+							JSONObject so=SettingsObjects.getSettingsObject(ac, cfgid);
+							
+							String ffscope=so.getString("scope");							
+							if (ffscope.matches("[A-Z_]+-.*")){
+								String etype=ffscope.substring(0, ffscope.lastIndexOf("-"));
 
-					scopedlist.add(ssd.getSchemaid());
-				}
-
-			});
-
-			scopedsettings.forEach((scope, settings) -> {
-				System.out.println(scope);
-				settings.forEach((schema) -> {
-					System.out.println("  " + schema);
-				});
-
-				String[] sschemas = ApiUtil.vectorToArray(settings);
-				boolean isEntity=scope.matches("[A-Z_]+");				
-				if (isEntity) {
-					
-					EntityList el = EntityList.load(ac, "type(\"" + scope + "\")",from);
-
-					// BEGIN entities
-					if ((el != null) && (el.hasEntities())) {
-						System.out.println("  ... retrieving settings for " + el.size() + " entities");
-
-						el.getEntities().forEach((id, ent) -> {
-							String[] sscope = new String[1];
-							sscope[0] = id;
-
-							// get settings for entity
-							SettingsObjectList sol = SettingsObjectList.load(ac, sschemas, sscope);
-
-							// if settings exist for current entity
-							if (sol.hasItems()) {
-								try {
-									
-									String id2;
-									// get detailed entity
-									JSONObject entity = MonitoredEntities.getEntity(ac, id);
-									
-									switch(scope) {
-										case "HOST":
-										case "HOST_GROUP":
-										case "APPLICATION":
-										case "SYNTHETIC_TEST":
-										case "HTTP_CHECK":
-											id2=normalize(entity.getString("displayName"));
-											break;
-										case "PROCESS_GROUP":
-										case "SERVICE":
-											id2=normalize(entity.getString("displayName")+" - "+id);
-											break;
-										default:
-											id2=id;
-											break;
-									}
-																		
+								String id2;
+								// get detailed entity
+								
+								// TODO : cache this lookup + write on first
+								JSONObject entity = MonitoredEntities.getEntity(ac, ffscope);
+/*
+ *
 									// dump entity
 									// create folder
 									File fe = new File(workdir + scope + "\\" + id2);
@@ -158,106 +133,37 @@ public class Settings {
 											workdir + scope + "\\" + id2 + "\\" + id2 + ".json");
 									entity.write(ew, 2, 0);
 									ew.close();
-									// dump settings
+ * 
+ * */								
 
-									sol.getItems().forEach((cfgid, config) -> {
-										
-										try {
-											writeSchema(workdir + scope + "\\" + id2,SettingsObjects.getSettingsObject(ac, cfgid),schemadetails.get(((SettingsObjectSummary)config).getSchemaid()).getRaw().getBoolean("multiObject"));
-										} catch (Exception e) {
-											System.err.println("ERROR while writing entity settings for: " + id2 + " :: " + cfgid);
-										}
-										
-/*										
-										String foldername;
-										String filename;
-										
-										SettingsSchemaDetail ssd=schemadetails.get(((SettingsObjectSummary)config).getSchemaid());
-										
-										if (ssd.getRaw().getBoolean("multiObject")) {
-											foldername=workdir + "\\" + scope + "\\" + id + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_");
-										    filename=workdir + "\\" + scope + "\\" + id + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_")  +"\\"+ cfgid + ".json"	;										
-										} else {
-											foldername=workdir + "\\" + scope + "\\" + id + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_");
-										    filename=workdir + "\\" + scope + "\\" + id + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_")  +"\\"+ cfgid + ".json"	;										
-										}
-										
-										
-										// create folder
-										File fe2 = new File(workdir + "\\" + scope + "\\" + id + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_"));
-										fe2.mkdirs();
-
-										try {
-											FileWriter cw = new FileWriter(
-													workdir + "\\" + scope + "\\" + id + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_")  +"\\"+ cfgid + ".json");
-											SettingsObjects.getSettingsObject(ac, cfgid).write(cw, 2, 0);
-											cw.close();
-										} catch (Exception e2) {
-											System.err.println(
-													"ERROR while writing entity settings for: " + id + " :: " + cfgid);
-										}
-*/										
-									});
-
-								} catch (Exception e) {
-									System.err.println("ERROR while writing entity settings for: " + id);
+								switch(etype) {
+									case "HOST":
+									case "HOST_GROUP":
+									case "APPLICATION":
+									case "SYNTHETIC_TEST":
+									case "HTTP_CHECK":
+										id2=normalize(entity.getString("displayName"));
+										break;
+									case "PROCESS_GROUP":
+									case "SERVICE":
+										id2=normalize(entity.getString("displayName")+" - "+ffscope);
+										break;
+									default:
+										id2=ffscope;
+										break;
 								}
-
+										
+								scope=etype+"\\"+id2;
+							} else {
+								scope=normalize(ffscope);
 							}
-
-						});
-						
-					// END entities
-					} else {
-						System.out.println("  ... no entities found");						
-					}					
-				} else {
-					
-					String[] sscope = new String[1];
-					sscope[0] = scope;
-					
-					System.out.println("Getting objects for non-entity: "+scope);
-
-					// get settings for entity
-					SettingsObjectList sol = SettingsObjectList.load(ac, sschemas, sscope);
-
-					// if settings exist for nonEntity
-					if (sol.hasItems()) {
-						try {
-							// dump settings
-
-							sol.getItems().forEach((cfgid, config) -> {
-								try {
-									writeSchema(workdir + scope,SettingsObjects.getSettingsObject(ac, cfgid),schemadetails.get(((SettingsObjectSummary)config).getSchemaid()).getRaw().getBoolean("multiObject"));
-								} catch (Exception e) {
-									System.err.println("ERROR while writing settings for: " + scope +" :: "+ cfgid);
-									e.printStackTrace(System.err);
-								}
-
-/*								
-								// create folder
-								File fe = new File(workdir + scope + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_"));
-								fe.mkdirs();
-
-								try {
-									FileWriter cw = new FileWriter(workdir + scope + "\\" + ((SettingsObjectSummary)config).getSchemaid().replaceAll(":", "_") +"\\"+cfgid + ".json");
-									SettingsObjects.getSettingsObject(ac, cfgid).write(cw, 2, 0);
-									cw.close();
-								} catch (Exception e2) {
-									System.err.println(
-											"ERROR while writing entity settings for: " + scope + " :: " + cfgid);
-								}
-*/								
-							});
-
+								
+							writeSchemaValues(workdir + scope,SettingsObjects.getSettingsObject(ac, cfgid),ssd.getRaw().getBoolean("multiObject"));
 						} catch (Exception e) {
-							System.err.println("ERROR while writing entity settings for: " + scope);
+							System.err.println("ERROR while writing entity settings for: " + scope + " :: " + cfgid);
 						}
-
-					}
-
-				}
-
+					});	
+				}	
 			});
 
 //			System.out.println(ssl);
@@ -267,7 +173,7 @@ public class Settings {
 		System.out.println("ENDING Settings export ...");
 	}
 	
-	private static void writeSchema(String base,JSONObject schema, boolean multi) {
+	private static void writeSchemaValues(String base,JSONObject schema, boolean multi) {
 		
 		String foldername;
 		String filename;
@@ -298,7 +204,7 @@ public class Settings {
 			schema.write(cw, 2, 0);
 			cw.close();
 		} catch (Exception e) {
-			System.err.println("ERROR while writing settings.");
+			System.err.println("ERROR while writing settings.["+filename+"]");
 			e.printStackTrace(System.err);
 		}
 	}
