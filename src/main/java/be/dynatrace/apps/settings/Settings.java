@@ -6,21 +6,13 @@ import java.io.FileWriter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Vector;
 
 import org.json.JSONObject;
 
-
 import be.dynatrace.api.client.ApiClient;
-import be.dynatrace.api.client.ApiUtil;
 import be.dynatrace.api.env.v2.MonitoredEntities;
 import be.dynatrace.api.env.v2.SettingsObjects;
-//import be.dynatrace.api.env.v2.SettingsSchemas;
-import be.dynatrace.api.model.v2.EntityList;
 import be.dynatrace.api.model.v2.SettingsObjectList;
-import be.dynatrace.api.model.v2.SettingsObjectSummary;
-//import be.dynatrace.api.client.ApiUtil;
-//import be.dynatrace.api.model.v2.SettingsObjectList;
 import be.dynatrace.api.model.v2.SettingsSchemaDetail;
 import be.dynatrace.api.model.v2.SettingsSchemaList;
 import be.dynatrace.api.model.v2.SettingsSchemaSummary;
@@ -28,7 +20,8 @@ import be.dynatrace.api.model.v2.SettingsSchemaSummary;
 public class Settings {
 
 	private static String workdir = "C:\\Data\\Dynatrace\\Development\\settings\\";
-	private static String from = "now-30d";
+//	private static String from = "now-30d";
+	private static Map<String,JSONObject> entitycache=new HashMap<String,JSONObject>();
 	
 	
 	private static Properties initialize(String config) {
@@ -48,15 +41,12 @@ public class Settings {
 		if (p.containsKey("workdir")) {
 			workdir=p.getProperty("workdir")+"\\settings\\";
 		}
-		if (p.containsKey("from")) {
-			from=p.getProperty("from");
-		}
+//		if (p.containsKey("from")) {
+//			from=p.getProperty("from");
+//		}
 		return p;
 	}
 
-//	private static void loadSchemaDetail(Map<String, SettingsSchemaDetail> schemadetails){	
-//	}
-	
 	private static void writeSchema(SettingsSchemaDetail ssd){
 		// create folder
 		try {
@@ -73,7 +63,6 @@ public class Settings {
 			//e.printStackTrace(System.err);
 		}		
 	}
-	
 	
 	public static void main(String[] args) {
 		
@@ -93,8 +82,6 @@ public class Settings {
 			Map<String, SettingsSchemaSummary> schemas = ssl.getItems();
 			Map<String, SettingsSchemaDetail> schemadetails = new HashMap<String, SettingsSchemaDetail>();
 
-//			Map<String, Vector<String>> scopedsettings = new HashMap<String, Vector<String>>();
-
 			schemas.forEach((id, schema) -> {
 
 				// load detailed schema
@@ -113,60 +100,68 @@ public class Settings {
 						try {
 							JSONObject so=SettingsObjects.getSettingsObject(ac, cfgid);
 							
-							String ffscope=so.getString("scope");							
+							String ffscope=so.getString("scope");
+							scope=normalize(ffscope);
+							
 							if (ffscope.matches("[A-Z_]+-.*")){
 								String etype=ffscope.substring(0, ffscope.lastIndexOf("-"));
 
 								String id2;
 								// get detailed entity
-								
-								// TODO : cache this lookup + write on first
-								JSONObject entity = MonitoredEntities.getEntity(ac, ffscope);
-/*
- *
-									// dump entity
-									// create folder
-									File fe = new File(workdir + scope + "\\" + id2);
-									fe.mkdirs();
+								JSONObject entity;
+								boolean first=false;
+								if (entitycache.containsKey(ffscope)) {
+									entity=entitycache.get(ffscope);
+								} else {
+									entity = MonitoredEntities.getEntity(ac, ffscope);
+									first=true;
+									entitycache.put(ffscope, entity);
+								}
 
-									FileWriter ew = new FileWriter(
-											workdir + scope + "\\" + id2 + "\\" + id2 + ".json");
-									entity.write(ew, 2, 0);
-									ew.close();
- * 
- * */								
+								if (entity.has("displayName")) {
+									switch(etype) {
+										case "APPLICATION":
+										case "CUSTOM_APPLICATION":
+										case "HOST":
+										case "HOST_GROUP":
+										case "HTTP_CHECK":
+										case "KUBERNETES_CLUSTER":	
+										case "MOBILE_APPLICATION":	
+										case "SYNTHETIC_TEST":
+											id2=normalize(entity.getString("displayName"));
+											break;
+										case "PROCESS_GROUP":
+										case "SERVICE":
+											id2=normalize(entity.getString("displayName")+" - "+ffscope);
+											break;
+										default:
+											id2=ffscope;
+											break;
+									}
+								} else {
+									id2=ffscope;									
+								}
 
-								switch(etype) {
-									case "HOST":
-									case "HOST_GROUP":
-									case "APPLICATION":
-									case "SYNTHETIC_TEST":
-									case "HTTP_CHECK":
-										id2=normalize(entity.getString("displayName"));
-										break;
-									case "PROCESS_GROUP":
-									case "SERVICE":
-										id2=normalize(entity.getString("displayName")+" - "+ffscope);
-										break;
-									default:
-										id2=ffscope;
-										break;
+								if (first) {
+									writeEntity(etype, id2, entity);
 								}
 										
 								scope=etype+"\\"+id2;
-							} else {
-								scope=normalize(ffscope);
+							} else if (ffscope.startsWith("metric")) {
+								scope="metric\\"+normalize(ffscope.substring(7));
+							} else if (ffscope.startsWith("ua-screen")) {
+								scope="ua-screen\\"+normalize(ffscope.substring(10));								
 							}
 								
 							writeSchemaValues(workdir + scope,SettingsObjects.getSettingsObject(ac, cfgid),ssd.getRaw().getBoolean("multiObject"));
 						} catch (Exception e) {
 							System.err.println("ERROR while writing entity settings for: " + scope + " :: " + cfgid);
+							// DEBUG e.printStackTrace(System.err);
 						}
 					});	
 				}	
 			});
 
-//			System.out.println(ssl);
 		} catch (Exception e) {
 			e.printStackTrace(System.err);
 		}
@@ -194,7 +189,6 @@ public class Settings {
 			
 		}
 		
-
 		// create folder
 		File fe = new File(foldername);
 		fe.mkdirs();
@@ -208,6 +202,21 @@ public class Settings {
 			e.printStackTrace(System.err);
 		}
 	}
+
+	private static void writeEntity(String etype,String id,JSONObject entity) {
+		// create folder
+		File fe = new File(workdir + etype + "\\" + id);
+		fe.mkdirs();
+
+		try {
+			FileWriter ew = new FileWriter(workdir + etype + "\\" + id + "\\" + id + ".json");
+			entity.write(ew, 2, 0);
+			ew.close();
+		} catch (Exception e) {
+			System.err.println("ERROR while writing entity.["+etype+"/"+id+"]");
+			e.printStackTrace(System.err);
+		}	
+	}
 	
 	private static String normalize(String escapeme) {
 		return escapeme.replaceAll(":","_").
@@ -215,7 +224,5 @@ public class Settings {
 				replaceAll(">","_").
 				replaceAll("\\*","_").				
 				replaceAll("/","_");
-		
 	}
-	
 }
