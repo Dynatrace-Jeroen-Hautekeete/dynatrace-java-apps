@@ -6,6 +6,7 @@ import java.io.FileWriter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.StringTokenizer;
 
 import org.json.JSONObject;
 
@@ -22,7 +23,8 @@ public class Settings {
 	private static String workdir = "C:\\Data\\Dynatrace\\Development\\settings\\";
 //	private static String from = "now-30d";
 	private static Map<String,JSONObject> entitycache=new HashMap<String,JSONObject>();
-	
+	private static long lastseen=0l;
+	private static String[] stripfields={};
 	
 	private static Properties initialize(String config) {
 		Properties p=new Properties();
@@ -44,6 +46,24 @@ public class Settings {
 //		if (p.containsKey("from")) {
 //			from=p.getProperty("from");
 //		}
+		
+		if (p.containsKey("lastseen")) {
+			lastseen=Long.parseLong(p.getProperty("lastseen"));
+		}
+
+		if (p.containsKey("stripfields")) {
+			
+			StringTokenizer st=new StringTokenizer(p.getProperty("stripfields"), ",");
+			
+			int ntok=st.countTokens();
+			stripfields=new String[ntok];
+			for (int i=0;i<ntok;i++) {
+				stripfields[i]=st.nextToken();
+			}
+			
+			lastseen=Long.parseLong(p.getProperty("lastseen"));
+		}
+		
 		return p;
 	}
 
@@ -83,7 +103,10 @@ public class Settings {
 			Map<String, SettingsSchemaDetail> schemadetails = new HashMap<String, SettingsSchemaDetail>();
 
 			schemas.forEach((id, schema) -> {
-
+				
+				//DEBUG
+				System.out.println("Loading schema and objects : "+id);
+				
 				// load detailed schema
 				SettingsSchemaDetail ssd = schema.loadDetail(ac);
 				schemadetails.put(id, ssd);
@@ -96,7 +119,10 @@ public class Settings {
 				if (sol.hasItems()) {
 
 					sol.getItems().forEach((cfgid, config) -> {
+						//DEBUG
+						System.out.print("+");
 						String scope="<unresolved>";
+						boolean skip=false;
 						try {
 							JSONObject so=SettingsObjects.getSettingsObject(ac, cfgid);
 							
@@ -117,6 +143,9 @@ public class Settings {
 									first=true;
 									entitycache.put(ffscope, entity);
 								}
+								
+								if ((lastseen>0l) && (entity.has("error") || entity.getLong("lastSeenTms")<lastseen))
+									skip=true;
 
 								if (entity.has("displayName")) {
 									switch(etype) {
@@ -142,7 +171,7 @@ public class Settings {
 									id2=ffscope;									
 								}
 
-								if (first) {
+								if (first && !skip) {
 									writeEntity(etype, id2, entity);
 								}
 										
@@ -152,13 +181,16 @@ public class Settings {
 							} else if (ffscope.startsWith("ua-screen")) {
 								scope="ua-screen\\"+normalize(ffscope.substring(10));								
 							}
-								
-							writeSchemaValues(workdir + scope,SettingsObjects.getSettingsObject(ac, cfgid),ssd.getRaw().getBoolean("multiObject"));
+							
+							if (!skip)
+								writeSchemaValues(workdir + scope,SettingsObjects.getSettingsObject(ac, cfgid),ssd.getRaw().getBoolean("multiObject"));
 						} catch (Exception e) {
 							System.err.println("ERROR while writing entity settings for: " + scope + " :: " + cfgid);
 							// DEBUG e.printStackTrace(System.err);
 						}
-					});	
+					});
+					//DEBUG
+					System.out.println("");
 				}	
 			});
 
@@ -178,17 +210,26 @@ public class Settings {
 			
 			if (schema.getJSONObject("value").has("name"))
 				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getJSONObject("value").getString("name"))+".json";
-			else
-				if (schema.getJSONObject("value").has("apiName"))
-					filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getJSONObject("value").getString("apiName"))+".json";
-				else 
-					filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getString("objectId"))+".json";				
+			else if (schema.getJSONObject("value").has("displayName"))
+				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getJSONObject("value").getString("displayName"))+".json";
+			else if (schema.getJSONObject("value").has("apiName"))
+				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getJSONObject("value").getString("apiName"))+".json";
+			else if (schema.has("summary") && !schema.getString("summary").equals(""))
+				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getString("summary"))+".json";
+			else 
+				filename=  base+"\\"+normalize(schema.getString("schemaId"))+"\\"+normalize(schema.getString("objectId"))+".json";				
 		} else {
 			foldername=base;
 			filename=  base+"\\"+normalize(schema.getString("schemaId"))+".json";
 			
 		}
 		
+		
+		
+		// cleanup schema to simplify comparison
+		for (String rem : stripfields)
+			schema.remove(rem);
+			
 		// create folder
 		File fe = new File(foldername);
 		fe.mkdirs();
@@ -219,10 +260,14 @@ public class Settings {
 	}
 	
 	private static String normalize(String escapeme) {
-		return escapeme.replaceAll(":","_").
-				replaceAll("<","_").
-				replaceAll(">","_").
-				replaceAll("\\*","_").				
-				replaceAll("/","_");
+		return escapeme.replaceAll(":","_")
+				.replaceAll("<","_")
+				.replaceAll(">","_")
+				.replaceAll("\\*","_")				
+				.replaceAll("/","_")			
+				.replaceAll("\"","_")
+				.replaceAll("\\?","_")
+				.replaceAll("[ ]++$","");
+				// .replaceAll("[ ]++\\","\\");
 	}
 }
